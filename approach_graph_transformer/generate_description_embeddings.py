@@ -31,6 +31,8 @@ def pool_embeddings(outputs, attention_mask, model_type, pooling):
     else:
         raise ValueError(f"Unknown pooling: {pooling}")
 
+def sanitize_model_name(model_name: str) -> str:
+    return model_name.replace("/", "_")
 
 # -----------------------------------------------------
 # Main
@@ -113,7 +115,9 @@ def main():
             ]
         })
 
-        out_path = Path(args.out_dir) / f"{split}_embeddings.csv"
+        model_tag = sanitize_model_name(args.model)
+        out_path = Path(args.out_dir) / f"{split}_embeddings_{model_tag}.csv"
+
         df.to_csv(out_path, index=False)
         print(f"Saved embeddings to {out_path}")
 
