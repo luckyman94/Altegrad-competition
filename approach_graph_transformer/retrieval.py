@@ -102,7 +102,7 @@ def main():
     TRAIN_EMB = "/content/drive/MyDrive/molecule-captioning/embeddings/train_embeddings_sentence-transformers_all-mpnet-base-v2.csv"
     CKPT = "/content/drive/MyDrive/molecule-captioning/checkpoints/gps_mpnet.pt"
 
-    output_csv = "submission_retrieval_only.csv"
+    output_csv = "/content/drive/MyDrive/molecule-captioning/submission_retrieval_only.csv"
 
     # -------------------------
     # Load text embeddings
