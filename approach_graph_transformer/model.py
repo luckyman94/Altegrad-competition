@@ -3,6 +3,8 @@ import torch.nn as nn
 from utils import x_map, e_map
 from torch_geometric.nn import GPSConv, GINEConv, global_mean_pool, global_add_pool
 import torch.nn.functional as F
+from dataclasses import dataclass
+
 
 ATOM_FEATURE_DIMS = [
     len(x_map['atomic_num']),
@@ -23,6 +25,7 @@ BOND_FEATURE_DIMS = [
 ]
 
 
+@dataclass
 class GraphEncoderConfig:
     hidden_dim = 256
     out_dim= 768  
