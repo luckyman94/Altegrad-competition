@@ -40,24 +40,25 @@ def load_graph_encoder(ckpt_path: str, device: str) -> GraphEncoder:
 # Encode graphs → embeddings
 # --------------------------------------------------
 @torch.no_grad()
-def encode_graphs(
-    graph_encoder: GraphEncoder,
-    graph_pkl: str,
-    device: str,
-    batch_size: int = 64,
-):
+def encode_graphs(model, graph_pkl, device, batch_size=64):
     ds = PreprocessedGraphDataset(graph_pkl)
     dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
     all_embs = []
     all_ids = []
 
-    for graphs, ids in dl:
+    ptr = 0  # pointeur dans ds.ids
+
+    for graphs in dl:
         graphs = graphs.to(device)
-        z = graph_encoder(graphs)
+
+        z = model(graphs)
         z = F.normalize(z, dim=-1)
         all_embs.append(z)
-        all_ids.extend(ids)
+
+        bs = graphs.num_graphs
+        all_ids.extend(ds.ids[ptr:ptr + bs])
+        ptr += bs
 
     return torch.cat(all_embs, dim=0), all_ids
 
@@ -179,6 +180,8 @@ def main():
     train_id2desc = load_descriptions_from_graphs(train_graphs)
     train_descs = [train_id2desc[i] for i in train_ids]
 
+    print(f"Loaded {len(train_embs)} training text embeddings")
+
     # -------------------------------
     # Load GNN + encode test graphs
     # -------------------------------
@@ -191,6 +194,12 @@ def main():
         batch_size=args.batch_size,
     )
 
+    print(len(query_embs), len(query_ids))
+    print(query_embs.shape)
+
+    print("Loaded and encoded test graphs")
+
+
     # -------------------------------
     # Retrieval
     # -------------------------------
@@ -200,6 +209,8 @@ def main():
         train_descs,
         k=args.k,
     )
+
+    print("Completed retrieval")
 
     prompts = [build_prompt(r) for r in retrieved]
 
@@ -212,6 +223,8 @@ def main():
         device=device,
         batch_size=args.gen_batch_size,
     )
+
+    print("Completed generation")
 
     # -------------------------------
     # Save
