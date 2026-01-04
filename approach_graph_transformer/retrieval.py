@@ -13,7 +13,13 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import (
+    AutoTokenizer,
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
+    GenerationConfig,
+)
 
 from model import GraphEncoder, GraphEncoderConfig
 from utils import (
@@ -23,19 +29,11 @@ from utils import (
     load_descriptions_from_graphs,
 )
 
-from transformers import (
-    AutoTokenizer,
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoModelForSeq2SeqLM,
-    GenerationConfig,
-)
-
 # --------------------------------------------------
 # Load trained GraphEncoder
 # --------------------------------------------------
 def load_graph_encoder(ckpt_path: str, device: str) -> GraphEncoder:
-    cfg = GraphEncoderConfig()  
+    cfg = GraphEncoderConfig()
     model = GraphEncoder(cfg)
     state = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(state)
@@ -55,13 +53,12 @@ def encode_graphs(model, graph_pkl, device, batch_size=64):
     all_embs = []
     all_ids = []
 
-    ptr = 0  # pointeur dans ds.ids
-
+    ptr = 0
     for graphs in dl:
         graphs = graphs.to(device)
-
         z = model(graphs)
         z = F.normalize(z, dim=-1)
+
         all_embs.append(z)
 
         bs = graphs.num_graphs
@@ -72,7 +69,7 @@ def encode_graphs(model, graph_pkl, device, batch_size=64):
 
 
 # --------------------------------------------------
-# kNN retrieval in text embedding space
+# kNN retrieval
 # --------------------------------------------------
 @torch.no_grad()
 def knn_retrieval(
@@ -91,7 +88,7 @@ def knn_retrieval(
 
 
 # --------------------------------------------------
-# Prompt construction (BLEU-friendly)
+# Prompt construction
 # --------------------------------------------------
 def build_prompt(retrieved_texts: List[str]) -> str:
     prompt = (
@@ -116,7 +113,6 @@ def build_prompt(retrieved_texts: List[str]) -> str:
 def generate_descriptions(
     prompts,
     model_name,
-    device,
     max_new_tokens=128,
 ):
     config = AutoConfig.from_pretrained(model_name)
@@ -176,7 +172,6 @@ def main():
     parser.add_argument("--llm", type=str, default="QizhiPei/biot5-plus-base")
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--gen_batch_size", type=int, default=4)
     parser.add_argument("--out_csv", type=str, default="retrieval_results.csv")
 
     args = parser.parse_args()
@@ -200,7 +195,7 @@ def main():
     print(f"Loaded {len(train_embs)} training text embeddings")
 
     # -------------------------------
-    # Load GNN + encode test graphs
+    # Encode test graphs
     # -------------------------------
     graph_encoder = load_graph_encoder(args.graph_ckpt, device)
 
@@ -211,11 +206,7 @@ def main():
         batch_size=args.batch_size,
     )
 
-    print(len(query_embs), len(query_ids))
-    print(query_embs.shape)
-
     print("Loaded and encoded test graphs")
-
 
     # -------------------------------
     # Retrieval
@@ -237,10 +228,7 @@ def main():
     generations = generate_descriptions(
         prompts,
         model_name=args.llm,
-        device=device,
-       batch_size=args.batch_size,
-)
-
+    )
 
     print("Completed generation")
 
