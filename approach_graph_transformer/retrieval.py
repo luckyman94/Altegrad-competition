@@ -8,6 +8,7 @@
 import argparse
 from pathlib import Path
 from typing import List
+from tqdm import tqdm
 
 import torch
 import torch.nn.functional as F
@@ -140,7 +141,7 @@ def generate_descriptions(
 
     outputs = []
 
-    for p in prompts:
+    for p in tqdm(prompts, desc="Generating descriptions"):
         inputs = tokenizer(
             p,
             return_tensors="pt",
