@@ -23,6 +23,14 @@ from utils import (
     load_descriptions_from_graphs,
 )
 
+from transformers import (
+    AutoTokenizer,
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
+    GenerationConfig,
+)
+
 # --------------------------------------------------
 # Load trained GraphEncoder
 # --------------------------------------------------
@@ -106,44 +114,53 @@ def build_prompt(retrieved_texts: List[str]) -> str:
 # --------------------------------------------------
 @torch.no_grad()
 def generate_descriptions(
-    prompts: List[str],
-    model_name: str,
-    device: str,
-    batch_size: int = 4,
-    max_new_tokens: int = 128,
+    prompts,
+    model_name,
+    device,
+    max_new_tokens=128,
 ):
+    config = AutoConfig.from_pretrained(model_name)
+
+    if config.is_encoder_decoder:
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            model_name, dtype=torch.float16, device_map="auto"
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, dtype=torch.float16, device_map="auto"
+        )
+
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right" if config.is_encoder_decoder else "left"
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        device_map="auto",
+    gen_cfg = GenerationConfig(
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=tokenizer.eos_token_id,
     )
-    model.eval()
 
     outputs = []
 
-    for i in range(0, len(prompts), batch_size):
-        batch = prompts[i : i + batch_size]
+    for p in prompts:
         inputs = tokenizer(
-            batch,
+            p,
             return_tensors="pt",
-            padding=True,
             truncation=True,
-        ).to(device)
+            max_length=1024,
+        ).to(model.device)
 
-        gen = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9,
-        )
+        out = model.generate(**inputs, generation_config=gen_cfg)
 
-        texts = tokenizer.batch_decode(gen, skip_special_tokens=True)
-        outputs.extend(texts)
+        if config.is_encoder_decoder:
+            text = tokenizer.decode(out[0], skip_special_tokens=True)
+        else:
+            gen = out[0][inputs["input_ids"].shape[1]:]
+            text = tokenizer.decode(gen, skip_special_tokens=True)
+
+        outputs.append(text.strip())
 
     return outputs
 
