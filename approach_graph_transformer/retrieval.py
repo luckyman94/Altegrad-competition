@@ -238,8 +238,9 @@ def main():
         prompts,
         model_name=args.llm,
         device=device,
-        batch_size=args.gen_batch_size,
-    )
+       batch_size=args.batch_size,
+)
+
 
     print("Completed generation")
 
