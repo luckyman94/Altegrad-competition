@@ -12,7 +12,7 @@ import argparse
 def train_epoch(
     graph_encoder,
     dataloader,
-    text_embeddings,  
+    text_embeddings,
     optimizer,
     device,
 ):
@@ -20,25 +20,16 @@ def train_epoch(
     total_loss = 0.0
     total = 0
 
-    for batch in dataloader:
-        graphs = batch.to(device)
-        ids = batch.id 
+    for graphs, ids in dataloader:
+        graphs = graphs.to(device)
 
-        # ----------------------------------
-        # Text embeddings (frozen)
-        # ----------------------------------
-        z_text = torch.stack(
-            [text_embeddings[i] for i in ids]
-        ).to(device)
+        z_text = F.normalize(
+            torch.stack([text_embeddings[i] for i in ids]).to(device),
+            dim=-1,
+        )
 
-        # ----------------------------------
-        # Graph embeddings (trainable)
-        # ----------------------------------
         z_graph = graph_encoder(graphs)
 
-        # ----------------------------------
-        # Contrastive loss
-        # ----------------------------------
         loss = contrastive_clip_loss(z_graph, z_text)
 
         optimizer.zero_grad()
@@ -52,6 +43,7 @@ def train_epoch(
     return total_loss / total
 
 
+
 @torch.no_grad()
 def evaluate_retrieval(
     graph_encoder,
@@ -63,17 +55,17 @@ def evaluate_retrieval(
 
     all_graph, all_text = [], []
 
-    for batch in dataloader:
-        graphs = batch.to(device)
-        ids = batch.id
+    for graphs, ids in dataloader:
+        graphs = graphs.to(device)
 
         z_graph = graph_encoder(graphs)
-        z_text = torch.stack(
-            [text_embeddings[i] for i in ids]
-        ).to(device)
+        z_text = F.normalize(
+            torch.stack([text_embeddings[i] for i in ids]).to(device),
+            dim=-1,
+        )
 
         all_graph.append(z_graph)
-        all_text.append(F.normalize(z_text, dim=-1))
+        all_text.append(z_text)
 
     G = torch.cat(all_graph)
     T = torch.cat(all_text)
@@ -84,11 +76,12 @@ def evaluate_retrieval(
     gt = torch.arange(T.size(0), device=device)
     pos = (ranks == gt[:, None]).nonzero()[:, 1] + 1
 
-    mrr = (1.0 / pos.float()).mean().item()
-    r1 = (pos <= 1).float().mean().item()
-    r5 = (pos <= 5).float().mean().item()
+    return {
+        "MRR": (1.0 / pos.float()).mean().item(),
+        "R@1": (pos <= 1).float().mean().item(),
+        "R@5": (pos <= 5).float().mean().item(),
+    }
 
-    return {"MRR": mrr, "R@1": r1, "R@5": r5}
 
 
 def main():
