@@ -110,12 +110,19 @@ def build_prompt(retrieved_texts: List[str]) -> str:
 # --------------------------------------------------
 # Generation
 # --------------------------------------------------
+def batched(iterable, n):
+    for i in range(0, len(iterable), n):
+        yield iterable[i:i + n]
+
+
 @torch.no_grad()
 def generate_descriptions(
     prompts,
     model_name,
+    gen_batch_size=8,
     max_new_tokens=128,
 ):
+
     config = AutoConfig.from_pretrained(model_name)
 
     if config.is_encoder_decoder:
@@ -141,25 +148,33 @@ def generate_descriptions(
 
     outputs = []
 
-    for p in tqdm(prompts, desc="Generating descriptions"):
+    for batch in tqdm(
+        batched(prompts, gen_batch_size),
+        total=(len(prompts) + gen_batch_size - 1) // gen_batch_size,
+        desc="Generating descriptions"
+    ):
         inputs = tokenizer(
-            p,
+            batch,
             return_tensors="pt",
+            padding=True,
             truncation=True,
             max_length=1024,
         ).to(model.device)
 
         out = model.generate(**inputs, generation_config=gen_cfg)
 
-        if config.is_encoder_decoder:
-            text = tokenizer.decode(out[0], skip_special_tokens=True)
-        else:
-            gen = out[0][inputs["input_ids"].shape[1]:]
-            text = tokenizer.decode(gen, skip_special_tokens=True)
+        for i in range(len(batch)):
+            if config.is_encoder_decoder:
+                text = tokenizer.decode(out[i], skip_special_tokens=True)
+            else:
+                input_len = inputs["attention_mask"][i].sum().item()
+                gen = out[i][input_len:]
+                text = tokenizer.decode(gen, skip_special_tokens=True)
 
-        outputs.append(text.strip())
+            outputs.append(text.strip())
 
     return outputs
+
 
 
 # --------------------------------------------------
