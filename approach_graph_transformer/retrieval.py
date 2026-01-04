@@ -1,277 +1,135 @@
-#!/usr/bin/env python3
-# retrieval.py
-# --------------------------------------------------
-# Simple semantic retrieval + generation
-# GPS graph encoder → text kNN → LLM generation
-# --------------------------------------------------
-
-import argparse
-from pathlib import Path
-from typing import List
-from tqdm import tqdm
-
+import os
 import torch
 import torch.nn.functional as F
+import pandas as pd
 from torch.utils.data import DataLoader
-
-from transformers import (
-    AutoTokenizer,
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoModelForSeq2SeqLM,
-    GenerationConfig,
-)
+from tqdm import tqdm
 
 from model import GraphEncoder, GraphEncoderConfig
 from utils import (
-    PreprocessedGraphDataset,
-    collate_fn,
     load_id2emb,
     load_descriptions_from_graphs,
+    PreprocessedGraphDataset,
+    collate_fn,
 )
 
-# --------------------------------------------------
-# Load trained GraphEncoder
-# --------------------------------------------------
-def load_graph_encoder(ckpt_path: str, device: str) -> GraphEncoder:
-    cfg = GraphEncoderConfig()
-    model = GraphEncoder(cfg)
-    state = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(state)
-    model.to(device)
-    model.eval()
-    return model
-
-
-# --------------------------------------------------
-# Encode graphs → embeddings
-# --------------------------------------------------
 @torch.no_grad()
-def encode_graphs(model, graph_pkl, device, batch_size=64):
-    ds = PreprocessedGraphDataset(graph_pkl)
-    dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+def retrieve_descriptions(
+    model,
+    train_graphs,
+    test_graphs,
+    train_emb_dict,
+    device,
+    output_csv,
+):
+    # -------------------------
+    # Load train descriptions
+    # -------------------------
+    train_id2desc = load_descriptions_from_graphs(train_graphs)
 
-    all_embs = []
-    all_ids = []
+    train_ids = list(train_emb_dict.keys())
+    train_embs = torch.stack([train_emb_dict[i] for i in train_ids]).to(device)
+    train_embs = F.normalize(train_embs, dim=-1)
 
+    print(f"Train set size: {len(train_ids)}")
+
+    # -------------------------
+    # Encode test graphs
+    # -------------------------
+    test_ds = PreprocessedGraphDataset(test_graphs)
+    test_dl = DataLoader(
+        test_ds,
+        batch_size=64,
+        shuffle=False,
+        collate_fn=collate_fn,
+    )
+
+    test_embs = []
+    test_ids_ordered = []
     ptr = 0
-    for graphs in dl:
+
+    for graphs in tqdm(test_dl, desc="Encoding test graphs"):
         graphs = graphs.to(device)
         z = model(graphs)
         z = F.normalize(z, dim=-1)
-
-        all_embs.append(z)
+        test_embs.append(z)
 
         bs = graphs.num_graphs
-        all_ids.extend(ds.ids[ptr:ptr + bs])
+        test_ids_ordered.extend(test_ds.ids[ptr:ptr + bs])
         ptr += bs
 
-    return torch.cat(all_embs, dim=0), all_ids
+    test_embs = torch.cat(test_embs, dim=0)
+    print(f"Encoded {test_embs.size(0)} test molecules")
 
+    # -------------------------
+    # Retrieval (k=1)
+    # -------------------------
+    sims = test_embs @ train_embs.T
+    best_idx = sims.argmax(dim=-1).cpu()
 
-# --------------------------------------------------
-# kNN retrieval
-# --------------------------------------------------
-@torch.no_grad()
-def knn_retrieval(
-    query_embs: torch.Tensor,
-    train_text_embs: torch.Tensor,
-    train_descriptions: List[str],
-    k: int,
-):
-    sims = query_embs @ train_text_embs.T
-    topk = sims.topk(k, dim=-1).indices
-
-    retrieved = []
-    for idxs in topk:
-        retrieved.append([train_descriptions[i] for i in idxs.tolist()])
-    return retrieved
-
-
-# --------------------------------------------------
-# Prompt construction
-# --------------------------------------------------
-def build_prompt(retrieved_texts: List[str]) -> str:
-    prompt = (
-        "You are an expert chemist.\n"
-        "Your task is to write a concise, factual description of a target molecule.\n\n"
-        "You are given descriptions of SIMILAR molecules.\n"
-        "Use them ONLY to understand writing style and typical properties.\n\n"
-        "STRICT RULES:\n"
-        "- Do NOT copy phrases verbatim.\n"
-        "- Do NOT repeat or mention the word 'Example'.\n"
-        "- Do NOT repeat sentences.\n"
-        "- Produce a SINGLE coherent description.\n\n"
-        "[REFERENCE DESCRIPTIONS]\n"
-    )
-
-    for txt in retrieved_texts:
-        prompt += f"- {txt.strip()}\n"
-
-    prompt += (
-        "\n[END REFERENCES]\n\n"
-        "Now write the description of the TARGET molecule:"
-    )
-    return prompt
-
-
-
-# --------------------------------------------------
-# Generation
-# --------------------------------------------------
-def batched(iterable, n):
-    for i in range(0, len(iterable), n):
-        yield iterable[i:i + n]
-
-
-@torch.no_grad()
-def generate_descriptions(
-    prompts,
-    model_name,
-    gen_batch_size=32,
-    max_new_tokens=128,
-):
-
-    config = AutoConfig.from_pretrained(model_name)
-
-    if config.is_encoder_decoder:
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_name, dtype=torch.float16, device_map="auto"
-        )
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, dtype=torch.float16, device_map="auto"
-        )
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "right" if config.is_encoder_decoder else "left"
-
-    gen_cfg = GenerationConfig(
-        max_new_tokens=max_new_tokens,
-        do_sample=True,
-        temperature=0.7,
-        top_p=0.9,
-        repetition_penalty=1.2,
-        pad_token_id=tokenizer.pad_token_id,
-        eos_token_id=tokenizer.eos_token_id,
-)
-
-
-    outputs = []
-
-    for batch in tqdm(
-        batched(prompts, gen_batch_size),
-        total=(len(prompts) + gen_batch_size - 1) // gen_batch_size,
-        desc="Generating descriptions"
+    results = []
+    for i, test_id in tqdm(
+        enumerate(test_ids_ordered),
+        total=len(test_ids_ordered),
+        desc="Retrieving descriptions",
     ):
-        inputs = tokenizer(
-            batch,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=1024,
-        ).to(model.device)
+        train_id = train_ids[best_idx[i].item()]
+        desc = train_id2desc[train_id]
 
-        out = model.generate(**inputs, generation_config=gen_cfg)
+        results.append({
+            "ID": test_id,
+            "description": desc,
+        })
 
-        for i in range(len(batch)):
-            if config.is_encoder_decoder:
-                text = tokenizer.decode(out[i], skip_special_tokens=True)
-            else:
-                input_len = inputs["attention_mask"][i].sum().item()
-                gen = out[i][input_len:]
-                text = tokenizer.decode(gen, skip_special_tokens=True)
+        if i < 5:
+            print(f"\nTest {test_id} → Train {train_id}")
+            print(desc[:120], "...")
 
-            outputs.append(text.strip())
+    df = pd.DataFrame(results)
+    df.to_csv(output_csv, index=False)
+    print(f"\nSaved submission to {output_csv}")
 
-    return outputs
+    return df
 
 
-
-# --------------------------------------------------
-# Main
-# --------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--train_emb", type=str, required=True)
-    parser.add_argument("--graph_ckpt", type=str, required=True)
-    parser.add_argument("--llm", type=str, default="QizhiPei/biot5-plus-base")
-    parser.add_argument("--k", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--out_csv", type=str, default="retrieval_results.csv")
-
-    args = parser.parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    data_dir = Path(args.data_dir)
-    train_graphs = str(data_dir / "train_graphs.pkl")
-    test_graphs = str(data_dir / "test_graphs.pkl")
+    DATA = "/content/drive/MyDrive/molecule-captioning/data"
+    TRAIN_GRAPHS = f"{DATA}/train_graphs.pkl"
+    TEST_GRAPHS = f"{DATA}/test_graphs.pkl"
 
-    # -------------------------------
-    # Load text embeddings + desc
-    # -------------------------------
-    train_text_emb = load_id2emb(args.train_emb)
-    train_ids = list(train_text_emb.keys())
-    train_embs = torch.stack([train_text_emb[i] for i in train_ids]).to(device)
-    train_embs = F.normalize(train_embs, dim=-1)
+    TRAIN_EMB = "/content/drive/MyDrive/molecule-captioning/embeddings/train_embeddings_sentence-transformers_all-mpnet-base-v2.csv"
+    CKPT = "/content/drive/MyDrive/molecule-captioning/checkpoints/gps_mpnet.pt"
 
-    train_id2desc = load_descriptions_from_graphs(train_graphs)
-    train_descs = [train_id2desc[i] for i in train_ids]
+    output_csv = "submission_retrieval_only.csv"
 
-    print(f"Loaded {len(train_embs)} training text embeddings")
+    # -------------------------
+    # Load text embeddings
+    # -------------------------
+    train_emb = load_id2emb(TRAIN_EMB)
+    emb_dim = len(next(iter(train_emb.values())))
+    print(f"Loaded {len(train_emb)} train embeddings")
 
-    # -------------------------------
-    # Encode test graphs
-    # -------------------------------
-    graph_encoder = load_graph_encoder(args.graph_ckpt, device)
+    # -------------------------
+    # Load GraphEncoder
+    # -------------------------
+    cfg = GraphEncoderConfig(out_dim=emb_dim)
+    model = GraphEncoder(cfg).to(device)
+    model.load_state_dict(torch.load(CKPT, map_location=device))
+    model.eval()
 
-    query_embs, query_ids = encode_graphs(
-        graph_encoder,
-        test_graphs,
-        device,
-        batch_size=args.batch_size,
+    # -------------------------
+    # Run retrieval
+    # -------------------------
+    retrieve_descriptions(
+        model=model,
+        train_graphs=TRAIN_GRAPHS,
+        test_graphs=TEST_GRAPHS,
+        train_emb_dict=train_emb,
+        device=device,
+        output_csv=output_csv,
     )
-
-    print("Loaded and encoded test graphs")
-
-    # -------------------------------
-    # Retrieval
-    # -------------------------------
-    retrieved = knn_retrieval(
-        query_embs,
-        train_embs,
-        train_descs,
-        k=args.k,
-    )
-
-    print("Completed retrieval")
-
-    prompts = [build_prompt(r) for r in retrieved]
-
-    # -------------------------------
-    # Generation
-    # -------------------------------
-    generations = generate_descriptions(
-        prompts,
-        model_name=args.llm,
-    )
-
-    print("Completed generation")
-
-    # -------------------------------
-    # Save
-    # -------------------------------
-    import pandas as pd
-
-    df = pd.DataFrame({
-        "ID": query_ids,
-        "description": generations,
-    })
-    df.to_csv(args.out_csv, index=False)
-    print(f"Saved predictions to {args.out_csv}")
 
 
 if __name__ == "__main__":
