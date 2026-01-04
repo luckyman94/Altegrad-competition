@@ -12,7 +12,6 @@ import argparse
 def train_epoch(
     graph_encoder,
     dataloader,
-    text_embeddings,
     optimizer,
     device,
 ):
@@ -20,13 +19,9 @@ def train_epoch(
     total_loss = 0.0
     total = 0
 
-    for graphs, ids in dataloader:
+    for graphs, z_text in dataloader:
         graphs = graphs.to(device)
-
-        z_text = F.normalize(
-            torch.stack([text_embeddings[i] for i in ids]).to(device),
-            dim=-1,
-        )
+        z_text = F.normalize(z_text.to(device), dim=-1)
 
         z_graph = graph_encoder(graphs)
 
@@ -44,25 +39,22 @@ def train_epoch(
 
 
 
+
 @torch.no_grad()
 def evaluate_retrieval(
     graph_encoder,
     dataloader,
-    text_embeddings,
     device,
 ):
     graph_encoder.eval()
 
     all_graph, all_text = [], []
 
-    for graphs, ids in dataloader:
+    for graphs, z_text in dataloader:
         graphs = graphs.to(device)
+        z_text = F.normalize(z_text.to(device), dim=-1)
 
         z_graph = graph_encoder(graphs)
-        z_text = F.normalize(
-            torch.stack([text_embeddings[i] for i in ids]).to(device),
-            dim=-1,
-        )
 
         all_graph.append(z_graph)
         all_text.append(z_text)
@@ -183,20 +175,11 @@ def main():
     patience_counter = 0
 
     for epoch in range(1, args.epochs + 1):
-        train_loss = train_epoch(
-            graph_encoder,
-            train_dl,
-            train_text_emb,
-            optimizer,
-            device,
-        )
+        train_loss = train_epoch(graph_encoder, train_dl, optimizer, device)
 
-        metrics = evaluate_retrieval(
-            graph_encoder,
-            val_dl,
-            val_text_emb,
-            device,
-        )
+
+        metrics = evaluate_retrieval(graph_encoder, val_dl, device)
+
 
         scheduler.step()
 
