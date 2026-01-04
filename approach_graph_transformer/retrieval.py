@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import pandas as pd
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
+from collections import Counter
 from model import GraphEncoder, GraphEncoderConfig
 from utils import (
     load_id2emb,
@@ -64,26 +64,36 @@ def retrieve_descriptions(
     # -------------------------
     # Retrieval (k=1)
     # -------------------------
+    K = 5
+
     sims = test_embs @ train_embs.T
-    best_idx = sims.argmax(dim=-1).cpu()
+    topk_idx = sims.topk(K, dim=-1).indices.cpu()
 
     results = []
     for i, test_id in tqdm(
-        enumerate(test_ids_ordered),
-        total=len(test_ids_ordered),
-        desc="Retrieving descriptions",
-    ):
-        train_id = train_ids[best_idx[i].item()]
-        desc = train_id2desc[train_id]
+    enumerate(test_ids_ordered),
+    total=len(test_ids_ordered),
+    desc="Retrieving descriptions (top-k vote)",
+):
+        neighbor_ids = topk_idx[i].tolist()
+        neighbor_train_ids = [train_ids[j] for j in neighbor_ids]
+        neighbor_descs = [train_id2desc[j] for j in neighbor_train_ids]
+
+        # Vote majoritaire
+        desc_counter = Counter(neighbor_descs)
+        voted_desc, _ = desc_counter.most_common(1)[0]
 
         results.append({
             "ID": test_id,
-            "description": desc,
+            "description": voted_desc,
         })
 
         if i < 5:
-            print(f"\nTest {test_id} → Train {train_id}")
-            print(desc[:120], "...")
+            print(f"\nTest {test_id}")
+            for nid in neighbor_train_ids:
+                print("  -", nid)
+            print("→ Selected description:")
+            print(voted_desc[:120], "...")
 
     df = pd.DataFrame(results)
     df.to_csv(output_csv, index=False)
