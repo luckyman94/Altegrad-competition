@@ -128,7 +128,7 @@ class GraphEncoder(nn.Module):
         self.cfg = cfg
 
         self.atom_encoder = AtomEncoder(cfg.hidden_dim)
-        self.bond_encoder = BondEncoder(cfg.hidden_dim, dropout=cfg.feature_dropout)
+        self.bond_encoder = BondEncoder(cfg.hidden_dim, dropout=cfg.dropout)
 
         self.backbone = GPSBackbone(
             hidden_dim=cfg.hidden_dim,
