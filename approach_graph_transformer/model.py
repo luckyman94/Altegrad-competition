@@ -24,24 +24,17 @@ BOND_FEATURE_DIMS = [
     len(e_map['is_conjugated']),
 ]
 
-
 @dataclass
 class GraphEncoderConfig:
-    hidden_dim = 256
-    out_dim= 768  
+    hidden_dim: int = 256
+    out_dim: int = 768
+    num_layers: int = 4
+    num_heads: int = 4
+    dropout: float = 0.1
+    attn_type: str = "multihead"
+    pool: str = "mean"
+    normalize_out: bool = True
 
-    # GPS backbone
-    num_layers= 4
-    num_heads = 4
-    dropout = 0.1
-    attn_type = "multihead"
-
-    # pooling + output normalization
-    pool = "mean"
-    normalize_out = True
-
-    # small regularization in the categorical embedding sums
-    feature_dropout = 0.0
 
 
 class AtomEncoder(nn.Module):
@@ -134,7 +127,7 @@ class GraphEncoder(nn.Module):
         super().__init__()
         self.cfg = cfg
 
-        self.atom_encoder = AtomEncoder(cfg.hidden_dim, dropout=cfg.feature_dropout)
+        self.atom_encoder = AtomEncoder(cfg.hidden_dim)
         self.bond_encoder = BondEncoder(cfg.hidden_dim, dropout=cfg.feature_dropout)
 
         self.backbone = GPSBackbone(
@@ -190,6 +183,7 @@ class GraphEncoder(nn.Module):
 if __name__ == "__main__":
     cfg = GraphEncoderConfig(hidden_dim=256, out_dim=768, num_layers=4, num_heads=4, dropout=0.1)
     model = GraphEncoder(cfg)
+    print(GraphEncoderConfig.__annotations__)
     print(model)
 
 
@@ -198,26 +192,4 @@ if __name__ == "__main__":
 
 
 
-
-
-
-
-
-
-
-class BondEncoder(nn.Module):
-    def __init__(self, hidden_dim):
-        super().__init__()
-    def forward(self, x):
-        pass
-
-class AtomEncoder(nn.Module):
-    def forward(self, x):
-        pass
-
-
-class GraphEncoder(nn.Module):
-    def forward(self, x):
-        pass
-    
 
