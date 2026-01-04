@@ -93,18 +93,27 @@ def knn_retrieval(
 # --------------------------------------------------
 def build_prompt(retrieved_texts: List[str]) -> str:
     prompt = (
-        "You are a chemist.\n\n"
-        "Below are descriptions of molecules similar to the target molecule:\n\n"
+        "You are an expert chemist.\n"
+        "Your task is to write a concise, factual description of a target molecule.\n\n"
+        "You are given descriptions of SIMILAR molecules.\n"
+        "Use them ONLY to understand writing style and typical properties.\n\n"
+        "STRICT RULES:\n"
+        "- Do NOT copy phrases verbatim.\n"
+        "- Do NOT repeat or mention the word 'Example'.\n"
+        "- Do NOT repeat sentences.\n"
+        "- Produce a SINGLE coherent description.\n\n"
+        "[REFERENCE DESCRIPTIONS]\n"
     )
 
-    for i, txt in enumerate(retrieved_texts, 1):
-        prompt += f"Example {i}:\n{txt}\n\n"
+    for txt in retrieved_texts:
+        prompt += f"- {txt.strip()}\n"
 
     prompt += (
-        "Based only on these examples, write a clear and factual description "
-        "of the target molecule."
+        "\n[END REFERENCES]\n\n"
+        "Now write the description of the TARGET molecule:"
     )
     return prompt
+
 
 
 # --------------------------------------------------
@@ -119,7 +128,7 @@ def batched(iterable, n):
 def generate_descriptions(
     prompts,
     model_name,
-    gen_batch_size=8,
+    gen_batch_size=32,
     max_new_tokens=128,
 ):
 
@@ -141,10 +150,14 @@ def generate_descriptions(
 
     gen_cfg = GenerationConfig(
         max_new_tokens=max_new_tokens,
-        do_sample=False,
+        do_sample=True,
+        temperature=0.7,
+        top_p=0.9,
+        repetition_penalty=1.2,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
-    )
+)
+
 
     outputs = []
 
