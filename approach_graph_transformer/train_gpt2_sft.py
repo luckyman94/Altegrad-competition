@@ -12,7 +12,7 @@ from transformers import (
 MODEL_NAME = "gpt2"
 DATA_FILE = "sft_train.jsonl"
 OUT_DIR = "./gpt2-sft"
-MAX_LEN = 512
+MAX_LEN = 256
 
 tokenizer = GPT2Tokenizer.from_pretrained(MODEL_NAME)
 tokenizer.pad_token = tokenizer.eos_token
