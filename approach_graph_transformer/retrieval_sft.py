@@ -107,6 +107,7 @@ def build_prompt(neighbor_descs: List[str]) -> str:
 # --------------------------------------------------
 # GPT-2 generation
 # --------------------------------------------------
+
 @torch.no_grad()
 def generate_descriptions(
     prompts: List[str],
@@ -117,12 +118,19 @@ def generate_descriptions(
 ):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"  # ✅ IMPORTANT pour GPT-2
 
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        dtype=torch.float16 if device == "cuda" else torch.float32,
     ).to(device)
     model.eval()
+
+    # ✅ Limite GPT-2
+    MAX_CONTEXT = model.config.n_positions  # 1024
+    MAX_PROMPT_LEN = MAX_CONTEXT - max_new_tokens
+    if MAX_PROMPT_LEN <= 0:
+        raise ValueError("max_new_tokens is too large for GPT-2 context window")
 
     outputs = []
 
@@ -134,7 +142,7 @@ def generate_descriptions(
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=1024,
+            max_length=MAX_PROMPT_LEN,  # ✅ FIX CRITIQUE
         ).to(device)
 
         out = model.generate(
@@ -145,11 +153,13 @@ def generate_descriptions(
         )
 
         for j in range(len(batch)):
-            gen = out[j][inputs["input_ids"][j].shape[0]:]
+            prompt_len = inputs["input_ids"][j].shape[0]
+            gen = out[j][prompt_len:]
             text = tokenizer.decode(gen, skip_special_tokens=True)
             outputs.append(text.strip())
 
     return outputs
+
 
 
 # --------------------------------------------------
