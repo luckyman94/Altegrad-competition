@@ -93,20 +93,31 @@ def knn_retrieval(
 # Prompt (BLEU-friendly)
 # --------------------------------------------------
 def build_prompt(neighbor_descs: List[str]) -> str:
-    prompt = (
-        "You are a chemist.\n\n"
-        "Below are descriptions of molecules similar to the target molecule:\n\n"
-    )
-    for i, d in enumerate(neighbor_descs, 1):
-        prompt += f"Example {i}:\n{d}\n\n"
-
-    prompt += "Write a clear and factual description of the target molecule."
+    prompt = "Examples of molecule descriptions:\n\n"
+    for d in neighbor_descs:
+        prompt += d.strip() + "\n\n"
+    prompt += "Description:\n"
     return prompt
+
+
 
 
 # --------------------------------------------------
 # GPT-2 generation
 # --------------------------------------------------
+def clean_generation(text: str) -> str:
+    BAD_PREFIXES = [
+        "Description:",
+        "Examples",
+        "Example",
+        "You are",
+        "Write a",
+    ]
+    for p in BAD_PREFIXES:
+        if p in text:
+            text = text.split(p)[0].strip()
+    return text
+
 
 @torch.no_grad()
 def generate_descriptions(
@@ -156,6 +167,7 @@ def generate_descriptions(
             prompt_len = inputs["input_ids"][j].shape[0]
             gen = out[j][prompt_len:]
             text = tokenizer.decode(gen, skip_special_tokens=True)
+            text = clean_generation(text)
             outputs.append(text.strip())
 
     return outputs
