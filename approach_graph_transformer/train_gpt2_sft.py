@@ -23,14 +23,33 @@ dataset = load_dataset("json", data_files=DATA_FILE)["train"]
 
 
 def tokenize(example):
-    text = example["prompt"] + "\n" + example["completion"]
-    tokens = tokenizer(
-        text,
+    prompt = example["prompt"]
+    completion = example["completion"]
+
+    full_text = prompt + "\n" + completion
+
+    enc = tokenizer(
+        full_text,
         truncation=True,
+        padding="max_length",
         max_length=MAX_LEN,
     )
-    tokens["labels"] = tokens["input_ids"].copy()
-    return tokens
+
+    labels = enc["input_ids"].copy()
+
+    # Mask du prompt
+    prompt_ids = tokenizer(
+        prompt,
+        truncation=True,
+        max_length=MAX_LEN,
+        add_special_tokens=False,
+    )["input_ids"]
+
+    labels[:len(prompt_ids)] = [-100] * len(prompt_ids)
+
+    enc["labels"] = labels
+    return enc
+
 
 
 dataset = dataset.map(tokenize, remove_columns=["prompt", "completion"])
