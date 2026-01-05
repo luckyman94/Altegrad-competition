@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from utils import x_map, e_map
 from torch_geometric.nn import GPSConv, GINEConv, global_mean_pool, global_add_pool
+from torch_geometric.nn import global_max_pool
 import torch.nn.functional as F
 from dataclasses import dataclass
 
@@ -127,9 +128,11 @@ class GraphEncoder(nn.Module):
         super().__init__()
         self.cfg = cfg
 
+        # Encoders
         self.atom_encoder = AtomEncoder(cfg.hidden_dim)
         self.bond_encoder = BondEncoder(cfg.hidden_dim, dropout=cfg.dropout)
 
+        # Backbone
         self.backbone = GPSBackbone(
             hidden_dim=cfg.hidden_dim,
             num_layers=cfg.num_layers,
@@ -138,45 +141,68 @@ class GraphEncoder(nn.Module):
             attn_type=cfg.attn_type,
         )
 
-        # pooling
-        if cfg.pool == "mean":
-            self.pool = global_mean_pool
-        elif cfg.pool == "add":
-            self.pool = global_add_pool
-        else:
-            raise ValueError("cfg.pool must be 'mean' or 'add'")
+        # Protein-specific design choices
+        self.use_gate = True  # residue importance
 
-        # projection head
-        self.proj = nn.Sequential(
+        self.pool_mean = global_mean_pool
+        self.pool_max = global_max_pool
+
+        # Gated node weighting
+        self.gate = nn.Sequential(
             nn.Linear(cfg.hidden_dim, cfg.hidden_dim),
+            nn.ReLU(),
+            nn.Linear(cfg.hidden_dim, 1),
+        )
+
+        # Projection head (mean + max => 2 * hidden_dim)
+        self.proj = nn.Sequential(
+            nn.Linear(2 * cfg.hidden_dim, cfg.hidden_dim),
             nn.ReLU(),
             nn.Dropout(cfg.dropout),
             nn.Linear(cfg.hidden_dim, cfg.out_dim),
         )
 
+
     def forward(self, batch) -> torch.Tensor:
-        # Ensure we have a batch vector even for single-graph Data
+        # Ensure batch vector exists
         if not hasattr(batch, "batch") or batch.batch is None:
-            batch.batch = torch.zeros(batch.x.size(0), dtype=torch.long, device=batch.x.device)
+            batch.batch = torch.zeros(
+                batch.x.size(0),
+                dtype=torch.long,
+                device=batch.x.device,
+            )
 
-        # 1) categorical -> continuous
-        h_nodes = self.atom_encoder(batch.x)         
-        h_edges = self.bond_encoder(batch.edge_attr) 
+        # 1) Encode atoms and bonds
+        h_nodes = self.atom_encoder(batch.x)          # (N, hidden_dim)
+        h_edges = self.bond_encoder(batch.edge_attr)  # (E, hidden_dim)
 
-        # 2) GPS node-level reasoning
-        h_nodes = self.backbone(h_nodes, batch.edge_index, batch.batch, h_edges)
+        # 2) GPS backbone (node-level reasoning)
+        h_nodes = self.backbone(
+            h_nodes,
+            batch.edge_index,
+            batch.batch,
+            h_edges,
+        )
 
-        # 3) pool -> graph embedding
-        g = self.pool(h_nodes, batch.batch)          
+        # 3) Gated node weighting (residue importance)
+        if self.use_gate:
+            weights = torch.sigmoid(self.gate(h_nodes))  # (N, 1)
+            h_nodes = h_nodes * weights
 
-        # 4) projection -> out space
-        z = self.proj(g)                             
+        # 4) Multi-scale protein readout
+        g_mean = self.pool_mean(h_nodes, batch.batch)
+        g_max  = self.pool_max(h_nodes, batch.batch)
+        g = torch.cat([g_mean, g_max], dim=-1)           # (B, 2*hidden_dim)
 
-        # 5) normalize for cosine similarity
+        # 5) Projection to embedding space
+        z = self.proj(g)                                 # (B, out_dim)
+
+        # 6) Normalize for cosine similarity / retrieval
         if self.cfg.normalize_out:
             z = F.normalize(z, dim=-1)
 
         return z
+
 
 
 
