@@ -12,6 +12,8 @@ from utils import (
     PreprocessedGraphDataset,
     collate_fn,
 )
+import argparse
+
 
 @torch.no_grad()
 def retrieve_descriptions(
@@ -21,7 +23,10 @@ def retrieve_descriptions(
     train_emb_dict,
     device,
     output_csv,
+    batch_size=64,
+    top_k=5,
 ):
+
     # -------------------------
     # Load train descriptions
     # -------------------------
@@ -38,11 +43,13 @@ def retrieve_descriptions(
     # -------------------------
     test_ds = PreprocessedGraphDataset(test_graphs)
     test_dl = DataLoader(
-        test_ds,
-        batch_size=64,
-        shuffle=False,
-        collate_fn=collate_fn,
-    )
+    test_ds,
+    batch_size=batch_size,
+    shuffle=False,
+    collate_fn=collate_fn,
+)
+
+
 
     test_embs = []
     test_ids_ordered = []
@@ -64,7 +71,7 @@ def retrieve_descriptions(
     # -------------------------
     # Retrieval (k=1)
     # -------------------------
-    K = 5
+    K = top_k
 
     sims = test_embs @ train_embs.T
     topk_idx = sims.topk(K, dim=-1).indices.cpu()
@@ -103,21 +110,66 @@ def retrieve_descriptions(
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Graph → text retrieval with top-k voting"
+    )
+
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        required=True,
+        help="Directory containing train_graphs.pkl and test_graphs.pkl",
+    )
+
+    parser.add_argument(
+        "--train_emb",
+        type=str,
+        required=True,
+        help="CSV file with train text embeddings",
+    )
+
+    parser.add_argument(
+        "--ckpt",
+        type=str,
+        required=True,
+        help="Path to trained GraphEncoder checkpoint",
+    )
+
+    parser.add_argument(
+        "--output",
+        type=str,
+        required=True,
+        help="Output CSV submission path",
+    )
+
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=64,
+        help="Batch size for test graph encoding",
+    )
+
+    parser.add_argument(
+        "--top_k",
+        type=int,
+        default=5,
+        help="Top-k neighbors for retrieval voting",
+    )
+
+    args = parser.parse_args()
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    DATA = "/content/drive/MyDrive/molecule-captioning/data"
-    TRAIN_GRAPHS = f"{DATA}/train_graphs.pkl"
-    TEST_GRAPHS = f"{DATA}/test_graphs.pkl"
-
-    TRAIN_EMB = "/content/drive/MyDrive/molecule-captioning/embeddings/train_embeddings_sentence-transformers_all-mpnet-base-v2.csv"
-    CKPT = "/content/drive/MyDrive/molecule-captioning/checkpoints/gps_mpnet.pt"
-
-    output_csv = "/content/drive/MyDrive/molecule-captioning/submission_retrieval_only.csv"
+    # -------------------------
+    # Paths
+    # -------------------------
+    TRAIN_GRAPHS = os.path.join(args.data_dir, "train_graphs.pkl")
+    TEST_GRAPHS = os.path.join(args.data_dir, "test_graphs.pkl")
 
     # -------------------------
     # Load text embeddings
     # -------------------------
-    train_emb = load_id2emb(TRAIN_EMB)
+    train_emb = load_id2emb(args.train_emb)
     emb_dim = len(next(iter(train_emb.values())))
     print(f"Loaded {len(train_emb)} train embeddings")
 
@@ -126,7 +178,7 @@ def main():
     # -------------------------
     cfg = GraphEncoderConfig(out_dim=emb_dim)
     model = GraphEncoder(cfg).to(device)
-    model.load_state_dict(torch.load(CKPT, map_location=device))
+    model.load_state_dict(torch.load(args.ckpt, map_location=device))
     model.eval()
 
     # -------------------------
@@ -138,8 +190,11 @@ def main():
         test_graphs=TEST_GRAPHS,
         train_emb_dict=train_emb,
         device=device,
-        output_csv=output_csv,
+        output_csv=args.output,
+        batch_size=args.batch_size,
+        top_k=args.top_k,
     )
+
 
 
 if __name__ == "__main__":
