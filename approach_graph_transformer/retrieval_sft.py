@@ -118,6 +118,23 @@ def clean_generation(text: str) -> str:
             text = text.split(p)[0].strip()
     return text
 
+def postprocess_description(text: str) -> str:
+    text = text.strip()
+
+    # Split si GPT-2 génère plusieurs descriptions
+    if text.count("The molecule is") > 1:
+        text = text.split("The molecule is", 2)[1]
+        text = "The molecule is" + text
+
+    # Coupe aux doubles sauts de ligne
+    text = text.split("\n\n")[0]
+
+    # Coupe phrases incomplètes
+    if not text.endswith("."):
+        text = text.rsplit(".", 1)[0] + "."
+
+    return text.strip()
+
 
 @torch.no_grad()
 def generate_descriptions(
@@ -167,7 +184,7 @@ def generate_descriptions(
             prompt_len = inputs["input_ids"][j].shape[0]
             gen = out[j][prompt_len:]
             text = tokenizer.decode(gen, skip_special_tokens=True)
-            text = clean_generation(text)
+            text = postprocess_description(text)
             outputs.append(text.strip())
 
     return outputs
