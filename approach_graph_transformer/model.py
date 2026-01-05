@@ -8,8 +8,6 @@ import json
 import torch
 from pathlib import Path
 
-from model import GraphEncoder, GraphEncoderConfig
-
 
 ATOM_FEATURE_DIMS = [
     len(x_map['atomic_num']),
