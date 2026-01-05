@@ -4,6 +4,11 @@ from utils import x_map, e_map
 from torch_geometric.nn import GPSConv, GINEConv, global_mean_pool, global_add_pool
 import torch.nn.functional as F
 from dataclasses import dataclass
+import json
+import torch
+from pathlib import Path
+
+from model import GraphEncoder, GraphEncoderConfig
 
 
 ATOM_FEATURE_DIMS = [
@@ -178,6 +183,64 @@ class GraphEncoder(nn.Module):
 
         return z
 
+
+def load_graph_encoder_from_checkpoint(
+    model_path: str,
+    device: str,
+    **kwargs,  # NOT USED, for compatibility
+):
+    """
+    Load GraphEncoder (GPS-based) using a saved config + state_dict.
+    """
+
+    model_path = Path(model_path)
+    model_dir = model_path.parent
+    config_path = model_dir / "model_config.json"
+
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"Missing GraphEncoder config file: {config_path}"
+        )
+
+    # ------------------------------------------------------------------
+    # Load config
+    # ------------------------------------------------------------------
+    with open(config_path, "r") as f:
+        cfg_dict = json.load(f)
+
+    model_class = cfg_dict.get("model_class", "GraphEncoder")
+
+    # Safety check
+    if model_class != "GraphEncoder":
+        raise ValueError(
+            f"Unsupported model_class '{model_class}', expected 'GraphEncoder'"
+        )
+
+    # ------------------------------------------------------------------
+    # Build config object
+    # ------------------------------------------------------------------
+    cfg = GraphEncoderConfig(
+        hidden_dim=cfg_dict.get("hidden_dim", 256),
+        out_dim=cfg_dict.get("out_dim", 768),
+        num_layers=cfg_dict.get("num_layers", 4),
+        num_heads=cfg_dict.get("num_heads", 4),
+        dropout=cfg_dict.get("dropout", 0.1),
+        attn_type=cfg_dict.get("attn_type", "multihead"),
+        pool=cfg_dict.get("pool", "mean"),
+        normalize_out=cfg_dict.get("normalize_out", True),
+    )
+
+    # ------------------------------------------------------------------
+    # Load model + weights
+    # ------------------------------------------------------------------
+    gnn = GraphEncoder(cfg).to(device)
+
+    state = torch.load(model_path, map_location=device)
+    gnn.load_state_dict(state)
+
+    gnn.eval()
+
+    return gnn
 
 
 if __name__ == "__main__":
